@@ -1,0 +1,1 @@
+python ./generate-selfplay-games.py --max_ply=0  --num_games=2 --time=5 --inc=0.00 --multipv=3 --threshold=25
