@@ -8,12 +8,16 @@
 # side don't prolong games forever.
 #
 
-import chess
-import chess.engine
+import datetime
 import sys, os
 import random
 import time
 from random import random, choice
+
+import chess
+import chess.pgn
+from chess import WHITE, BLACK
+import chess.engine
 
 from absl import app
 from absl import flags
@@ -21,114 +25,83 @@ from absl import logging
 
 
 FLAGS = flags.FLAGS
-flags.DEFINE_integer('goal', 10, '')
-flags.DEFINE_integer('depth', 1, 'search depth')
 flags.DEFINE_integer('max_game_ply', 100, '')
+flags.DEFINE_integer('num_games', 1, 'Number of games to generate')
+flags.DEFINE_integer('hash', 16, '')
+flags.DEFINE_integer('threads', 1, '')
+flags.DEFINE_string('fen', 'rnbqkb1r/pppppppp/8/6B1/3Pn2P/8/PPP1PPP1/RN1QKBNR b KQkq - 0 3', '')
 
+flags.DEFINE_float('time', 30.0, 'Time in seconds for entire game')
+flags.DEFINE_float('inc', 1.0, 'Increment in seconds')
 STOCKFISH = './stockfish'
-HASH = 512
-THREADS =1
 PCT_RANDOM = 0.25
 
-max_game = 0
-
-
-def parse_eco_fen():
-  for what in ['a', 'b', 'c', 'd', 'e']:
-    with open(f'eco/{what}.tsv', 'r') as f:
-      first = True
-      for line in f:
-        if first:
-          first = False
-          continue
-        yield line.split('\t')[2]
-
-
-def read_eco():
-  ecos = list(parse_eco_fen())
-  ecos.append('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
-  return ecos
-
-
-
-def play2(engine, starting_fen, pct_random):
+def play_game(engine, starting_fen):
   board = chess.Board(starting_fen)
   ply = -1
+  remaining_time = [FLAGS.time, FLAGS.time]
   while board.outcome() is None:
     ply += 1
-    if ply >= FLAGS.max_game_ply:
-      global max_game
-      max_game += 1
-      return
+    if FLAGS.max_game_ply and ply >= FLAGS.max_game_ply:
+      break
 
-    # Make every move, even complete garbage, and analyze, so that
-    # the ML model learns to make obvious moves/recaptures etc.
-    for move in board.legal_moves:
-      board.push(move)
-      if board.outcome() is None:
-        res = engine.analyse(board, chess.engine.Limit(depth=FLAGS.depth))
-        yield simplify_fen(board), res['pv'][0], simplify_score2(res['score'])[-1]
-      board.pop()
-
-    if random() < pct_random:
-      # To add variety, sometimes just move randomly and
-      # don't analyze.
-      move = choice(list(board.legal_moves))
-    else: # Play best
-      engine.configure({"Clear Hash": None})
-      res = engine.analyse(board, chess.engine.Limit(depth=FLAGS.depth))
-      move = res['pv'][0]
+    t1 = time.time()
+    res = engine.analyse(board, chess.engine.Limit(white_clock=remaining_time[WHITE],
+                                                   black_clock=remaining_time[BLACK],
+                                                   white_inc=FLAGS.inc,
+                                                   black_inc=FLAGS.inc))
+    dt = time.time() - t1
+    move = res['pv'][0]
+    remaining_time[board.turn] -= dt
+    remaining_time[board.turn] += FLAGS.inc
+    print(f'MOVE: {move}, {remaining_time[WHITE]:.1f} {remaining_time[BLACK]:.1f} {dt:.1f} {board.fen()}')
     board.push(move)
+  return board
 
 
-def simplify_fen(board):
-  #rn2kbnr/ppq2pp1/4p3/2pp2Bp/2P4P/1Q6/P2NNPP1/3RK2R w Kkq - 2 13
-  return ' '.join(board.fen().split(' ')[0:4])
+def generate_game(board, elapsed, starting_fen, xround):
+  game = chess.pgn.Game()
+  game.setup(starting_fen)
+  game.headers['Event'] = 'Generate game'
+  game.headers['Date'] = datetime.date.today().strftime('%Y.%m.%d')
+  game.headers['White'] = 'Stockfish'
+  game.headers['Black'] = 'Stockfish'
+  game.headers['Round'] = str(xround)
+  outcome = board.outcome()
+  if outcome:
+    game.headers['Result'] = outcome.result()
+  else:
+    game.headers['Result'] = '1/2 - 1/2'
+  game.headers['X-Duration'] = f'{elapsed:.1f}s'
+  game.headers['X-Time-Sec'] = str(FLAGS.time)
+  game.headers['X-Inc-Sec'] = str(FLAGS.inc)
 
-
-def simplify_score2(score):
-  mx = 10000
-  lim = 9000
-  res = int(score.pov(chess.WHITE).score(mate_score=10000))
-  if score.is_mate(): # normal, mate
-    assert res > lim or res < -lim, 'mate in 1000 considered unlikely'
-    return True, res
-  elif res > lim: # clamp
-    return False, lim
-  elif res < -lim: # clamp
-    return False, -lim
-  else: # normal, in range
-    return False, res
+  node = game
+  for move in board.move_stack:
+    node = node.add_main_variation(move)
+  return game
 
 
 def main(argv):
-  ecos = read_eco()
 
   engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
-  engine.configure({"Hash": HASH})
-  engine.configure({"Threads": THREADS})
+  engine.configure({"Hash": FLAGS.hash})
+  engine.configure({"Threads": FLAGS.threads})
+  f_pgn = open('games.pgn', 'w')
 
-  all_fens = set()
-  dups = 0
-  games = 0
-  go_on = True
+  for n in range(FLAGS.num_games):
+    t1 = time.time()
+    final_board = play_game(engine, FLAGS.fen)
+    dt = time.time() - t1
+    game = generate_game(final_board, dt, FLAGS.fen, n + 1)
+    print(str(game))
 
-  while go_on:
-    games += 1
-    for fen, move, score in play2(engine, choice(ecos), pct_random=PCT_RANDOM):
-      if fen in all_fens:
-        dups += 1
-        continue
-      all_fens.add(fen)
-      print(fen, move, score)
-      if len(all_fens) >= FLAGS.goal:
-        go_on = False
-        break
+    f_pgn.write(str(game) + '\n\n')
+    f_pgn.flush()
 
+  f_pgn.close()
   engine.quit()
 
-  global max_game
-  print('fens: ', len(all_fens), 'dups', dups, 'games', games, 'max games', max_game)
 
 
 if __name__ == '__main__':
