@@ -1,11 +1,7 @@
 # Generate training data with stockfish.
-# Start off in common ECO positions.
 #
-# Usually make the best move but sometimes make
-# a random move.
-#
-# Limit the max ply so that random moves by the stonger
-# side don't prolong games forever.
+# This may be an idea from 'The Silicon Road to Chess Improvement'
+# by GM Matthew Sadler.
 #
 
 import datetime
@@ -25,7 +21,7 @@ from absl import logging
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('max_ply', 100, '')
-flags.DEFINE_integer('num_games', 1, 'Number of games to generate')
+flags.DEFINE_integer('num_games', 1, 'Number of games to generate. Note that Lichess studys have a 32 game limit.')
 flags.DEFINE_integer('hash', 16, '')
 flags.DEFINE_integer('threads', 1, '')
 flags.DEFINE_string('fen', 'rnbqkb1r/pppppppp/8/6B1/3Pn2P/8/PPP1PPP1/RN1QKBNR b KQkq - 0 3', '')
@@ -89,10 +85,6 @@ def generate_game(board, elapsed, starting_fen, xround):
     game.headers['Result'] = outcome.result()
   else:
     game.headers['Result'] = '1/2 - 1/2'
-  game.headers['X-Duration'] = f'{elapsed:.1f}s'
-  game.headers['X-Time-Sec'] = str(FLAGS.time)
-  game.headers['X-Inc-Sec'] = str(FLAGS.inc)
-  game.headers['X-Threshold'] = str(FLAGS.threshold)
 
   node = game
   for move in board.move_stack:
