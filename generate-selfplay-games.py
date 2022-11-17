@@ -97,7 +97,7 @@ def main(argv):
   engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
   engine.configure({"Hash": FLAGS.hash})
   engine.configure({"Threads": FLAGS.threads})
-  f_pgn = open('games.pgn', 'w')
+  f_pgn = open(f'games-{int(time.time())}.pgn', 'w')
 
   for n in range(FLAGS.num_games):
     t1 = time.time()
@@ -105,9 +105,8 @@ def main(argv):
     dt = time.time() - t1
     game = generate_game(final_board, dt, FLAGS.fen, n + 1)
     print(f'Game {n} {dt:.1f}s ply={len(final_board.move_stack)} {final_board.outcome()}')
-    # print(str(game))
 
-    f_pgn.write(str(game) + '\n\n')
+    f_pgn.write(game.accept(chess.pgn.StringExporter(columns=75)) + '\n\n')
     f_pgn.flush()
 
   f_pgn.close()
