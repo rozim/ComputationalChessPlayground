@@ -1,7 +1,9 @@
-# Generate training data with stockfish.
+# Generate training data with lc0/leelachesszero.
 #
 # This may be an idea from 'The Silicon Road to Chess Improvement'
 # by GM Matthew Sadler.
+#
+# Use WDL.
 #
 
 import datetime
@@ -18,30 +20,70 @@ from absl import app
 from absl import flags
 from absl import logging
 
+import numpy as np
+
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('max_ply', 100, '')
 flags.DEFINE_integer('num_games', 1, 'Number of games to generate. Note that Lichess studys have a 32 game limit.')
-flags.DEFINE_integer('hash', 16, '')
-flags.DEFINE_integer('threads', 1, '')
 flags.DEFINE_string('fen', 'rnbqkb1r/pppppppp/8/6B1/3Pn2P/8/PPP1PPP1/RN1QKBNR b KQkq - 0 3', '')
 
 flags.DEFINE_float('time', 30.0, 'Time in seconds for entire game')
 flags.DEFINE_float('inc', 1.0, 'Increment in seconds')
 
-flags.DEFINE_integer('multipv', 1, '')
-flags.DEFINE_integer('threshold', 0, 'score delta')
-flags.DEFINE_float('pct', 0.25, 'How often to choose a non-optimal move with the threshold')
+flags.DEFINE_integer('multipv', 3, '')
 
-STOCKFISH = './stockfish'
-PCT_RANDOM = 0.25
+LC0 = 'lc0'
+
+T_INIT = 0.01 # Initial value, should heavily favor first entry.
+T_MUL  = 2.0
 
 
 def raw_position_fen(board):
   #rn2kbnr/ppq2pp1/4p3/2pp2Bp/2P4P/1Q6/P2NNPP1/3RK2R w Kkq - 2 13
   return ' '.join(board.fen().split(' ')[0])
 
-def play_game(engine, starting_fen, already):
+
+def softmax(x, temperature=1.0):
+  x_max = np.max(x)  # Avoid overflow
+  e_x = np.exp((x - x_max) / temperature)
+  return e_x / np.sum(e_x)
+
+
+
+def show(xx):
+  ar = [f'{x:.2f}' for x in xx]
+  return ' '.join(ar)
+
+
+class MovePicker:
+  def __init__(self):
+    self.rng = np.random.default_rng()
+
+  def pick_move(self, multi, temperature=0.1, log=None):
+    if multi[0]['score'].white().is_mate():
+      if log:
+        log.write('\tmate')
+      return multi[0]['pv'][0]
+
+    if len(multi) == 1:
+      if log:
+        log.write('\tforced')
+      return multi[0]['pv'][0]
+
+    a = [m['pv'][0] for m in multi]
+    x = [m['wdl'].relative.expectation() for m in multi]
+    p = softmax(x, temperature)
+    res = self.rng.choice(a=a, p=p)
+    if log:
+      log.write(f'\tt={temperature:.2f} a={[_.uci() for _ in a]} x={x} p={p} index={a.index(res)}\n')
+    return res
+
+
+
+def play_game(engine, starting_fen, already, picker, log, freqs):
+  log.write('\n')
+
   board = chess.Board(starting_fen)
   ply = -1
   remaining_time = [FLAGS.time, FLAGS.time]
@@ -57,27 +99,29 @@ def play_game(engine, starting_fen, already):
                                                    white_inc=FLAGS.inc,
                                                    black_inc=FLAGS.inc),
                          multipv=FLAGS.multipv)
-    scores = [m['score'].white().score(mate_score=10000) for m in multi]
+    raw = raw_position_fen(board)
 
-    alt = []
-    for i in range(1, len(scores)):
-      if abs(scores[i] - scores[0]) < FLAGS.threshold:
-        alt.append(multi[i]['pv'][0])
-
-    if not multi[0]['score'].white().is_mate() and len(alt) > 0 and random() < FLAGS.pct:
-      move = choice(alt)
-    else:
+    if raw in already:  # Already visited, use temperature.
+      temperature = freqs.get(raw, T_INIT)
+      move = picker.pick_move(multi, temperature=temperature, log=log)
+      freqs[raw] = temperature * T_MUL
+    else:  # First time in a node play best.
       move = multi[0]['pv'][0]
+
     dt = time.time() - t1
 
     remaining_time[board.turn] -= dt
     remaining_time[board.turn] += FLAGS.inc
-    # print(f'MOVE: {move}, {remaining_time[WHITE]:.1f} {remaining_time[BLACK]:.1f} {dt:.1f} {scores} {alt} {board.fen()}')
-    raw = raw_position_fen(board)
+
+    log.write(f'{ply} dt={dt:.2f} rt={remaining_time[board.turn]:.2f} {move.uci()}\n')
+    log.flush()
+
+
     if raw not in already:
       if novelty is None:
         novelty = ply
       already.add(raw)
+
     board.push(move)
   return board, novelty
 
@@ -87,8 +131,8 @@ def generate_game(board, elapsed, starting_fen, xround):
   game.setup(starting_fen)
   game.headers['Event'] = 'Generate game'
   game.headers['Date'] = datetime.date.today().strftime('%Y.%m.%d')
-  game.headers['White'] = 'Stockfish'
-  game.headers['Black'] = 'Stockfish'
+  game.headers['White'] = 'lc0'
+  game.headers['Black'] = 'lc0'
   game.headers['Round'] = str(xround)
   outcome = board.outcome()
   if outcome:
@@ -104,17 +148,22 @@ def generate_game(board, elapsed, starting_fen, xround):
 
 def main(argv):
 
-  engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
-  engine.configure({"Hash": FLAGS.hash})
-  engine.configure({"Threads": FLAGS.threads})
+  picker = MovePicker()
+  engine = chess.engine.SimpleEngine.popen_uci(LC0)
+  engine.configure({'UCI_ShowWDL': True})
   f_pgn = open(f'games-{int(time.time())}.pgn', 'w')
   already = set()
+  freqs = {} # fen -> #
+
+  log = open('log.txt', 'w')
+
   for n in range(FLAGS.num_games):
     t1 = time.time()
-    final_board, novelty = play_game(engine, FLAGS.fen, already)
+    final_board, novelty = play_game(engine, FLAGS.fen, already, picker, log, freqs)
     dt = time.time() - t1
     game = generate_game(final_board, dt, FLAGS.fen, n + 1)
     print(f'Game {n} {dt:.1f}s ply={len(final_board.move_stack)} {final_board.outcome()} novelty={novelty}')
+    log.write(f'Game {n} {dt:.1f}s ply={len(final_board.move_stack)} {final_board.outcome()} novelty={novelty}\n')
 
     f_pgn.write(game.accept(chess.pgn.StringExporter(columns=75)) + '\n\n')
     f_pgn.flush()
