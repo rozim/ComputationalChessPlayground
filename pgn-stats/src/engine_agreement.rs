@@ -128,19 +128,31 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
+    // Print configuration
+    println!("PGN file : {pgn_file}");
+    println!("Depth    : {depth}");
+    println!("Min ply  : {min_ply}");
+    if let Some(ref event_str) = event {
+        println!("Event    : {event_str}");
+    }
+    println!("Games    : {}", games.len());
+    println!();
+
     let mut engine = Engine::new(STOCKFISH_PATH)?;
     engine.init()?;
 
     // Header
     println!(
-        "{:<30} {:<30}  {:>12}  {:>12}",
-        "White", "Black", "White agree", "Black agree"
+        "{:>5}  {:<30} {:<30}  {:<7}  {:>12}  {:>12}",
+        "Round", "White", "Black", "Result", "White agree", "Black agree"
     );
-    println!("{}", "-".repeat(92));
+    println!("{}", "-".repeat(107));
 
     for game in &games {
-        let white = game.tags.get("White").map(|s| s.as_str()).unwrap_or("?");
-        let black = game.tags.get("Black").map(|s| s.as_str()).unwrap_or("?");
+        let white  = game.tags.get("White").map(|s| s.as_str()).unwrap_or("?");
+        let black  = game.tags.get("Black").map(|s| s.as_str()).unwrap_or("?");
+        let round  = game.tags.get("Round").map(|s| s.as_str()).unwrap_or("?");
+        let result = game.tags.get("Result").map(|s| s.as_str()).unwrap_or("?");
 
         // Build starting position (handle custom FEN via SetUp tag).
         let mut pos: Chess = if game.tags.get("SetUp").map(|s| s == "1").unwrap_or(false) {
@@ -206,8 +218,8 @@ fn main() -> io::Result<()> {
         };
 
         println!(
-            "{:<30} {:<30}  {:>12}  {:>12}",
-            white, black, pct(0), pct(1)
+            "{:>5}  {:<30} {:<30}  {:<7}  {:>12}  {:>12}",
+            round, white, black, result, pct(0), pct(1)
         );
     }
 
