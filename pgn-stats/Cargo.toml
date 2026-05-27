@@ -36,6 +36,10 @@ name = "stockfish-demo"
 path = "src/stockfish_demo.rs"
 
 [[bin]]
+name = "engine-agreement"
+path = "src/engine_agreement.rs"
+
+[[bin]]
 name = "stockfish-variety"
 path = "src/stockfish_variety.rs"
 
