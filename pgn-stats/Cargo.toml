@@ -9,6 +9,7 @@ pgnparse = "0.1"
 pgn-game-reader = { path = "../pgn-game-reader" }
 shakmaty = "0.30"
 stockfish = "0.2"
+rand = "0.9"
 
 [[bin]]
 name = "pgn-stats"
@@ -33,4 +34,8 @@ path = "src/game_reader_playthru.rs"
 [[bin]]
 name = "stockfish-demo"
 path = "src/stockfish_demo.rs"
+
+[[bin]]
+name = "stockfish-variety"
+path = "src/stockfish_variety.rs"
 
