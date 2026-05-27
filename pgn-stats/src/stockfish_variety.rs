@@ -22,14 +22,17 @@ const MULTI_PV: usize = 5;
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 
 const DEFAULT_NODES: u32 = 1_500_000;
+const DEFAULT_HASH_MB: u32 = 256;
 
 struct Args {
     nodes: u32,
+    hash_mb: u32,
     threshold: i32,
 }
 
 fn parse_args() -> Args {
     let mut nodes: u32 = DEFAULT_NODES;
+    let mut hash_mb: u32 = DEFAULT_HASH_MB;
     let mut threshold: i32 = 25;
 
     let mut args = env::args().skip(1);
@@ -40,14 +43,20 @@ fn parse_args() -> Args {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| { eprintln!("--nodes requires a value"); std::process::exit(1); });
             }
+            "--hash" | "-H" => {
+                hash_mb = args.next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| { eprintln!("--hash requires a value"); std::process::exit(1); });
+            }
             "--threshold" | "-t" => {
                 threshold = args.next()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| { eprintln!("--threshold requires a value"); std::process::exit(1); });
             }
             "--help" | "-h" => {
-                println!("Usage: stockfish-variety [--nodes N] [--threshold N]");
+                println!("Usage: stockfish-variety [--nodes N] [--hash MB] [--threshold N]");
                 println!("  --nodes N      Stockfish node budget per move (default: {DEFAULT_NODES})");
+                println!("  --hash MB      hash table size in MiB (default: {DEFAULT_HASH_MB})");
                 println!("  --threshold N  centipawn window for near-best moves (default: 25)");
                 std::process::exit(0);
             }
@@ -58,16 +67,17 @@ fn parse_args() -> Args {
         }
     }
 
-    Args { nodes, threshold }
+    Args { nodes, hash_mb, threshold }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
-    let Args { nodes, threshold } = parse_args();
+    let Args { nodes, hash_mb, threshold } = parse_args();
 
     let mut engine = Engine::new(STOCKFISH_PATH)?;
     engine.init()?;
+    engine.set_hash(hash_mb)?;
     engine.send("position startpos")?;
 
     let mut pos = Chess::default();
@@ -79,7 +89,7 @@ fn main() -> io::Result<()> {
     let mut best_moves = [0usize; 2];
     let mut non_best_moves = [0usize; 2];
 
-    println!("Stockfish variety (nodes={nodes}, multi_pv={MULTI_PV}, threshold={threshold}cp)");
+    println!("Stockfish variety (nodes={nodes}, hash={hash_mb}MiB, multi_pv={MULTI_PV}, threshold={threshold}cp)");
     println!();
 
     loop {

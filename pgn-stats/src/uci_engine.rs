@@ -69,11 +69,25 @@ impl Engine {
         self.ensure_ready()
     }
 
+    /// Set the hash table size in MiB.  Call after `init` and before searching.
+    /// Sends `isready`/`readyok` to confirm the engine has resized before returning.
+    pub fn set_hash(&mut self, mb: u32) -> io::Result<()> {
+        self.send(&format!("setoption name Hash value {mb}"))?;
+        self.ensure_ready()
+    }
+
+    /// Clear the transposition table.  Call before each search for reproducible,
+    /// position-independent results.
+    fn clear_hash(&mut self) -> io::Result<()> {
+        self.send("setoption name Clear Hash")
+    }
+
     /// Ask for top `n` moves within a node budget. Returns `Vec<(uci_move, centipawn_score)>`
     /// sorted best-first. Mate scores map to ±100 000 cp.
     pub fn go_multipv(&mut self, nodes: u32, n: usize) -> io::Result<Vec<(String, i32)>> {
         use std::collections::HashMap;
 
+        self.clear_hash()?;
         self.send(&format!("setoption name MultiPV value {n}"))?;
         self.send(&format!("go nodes {nodes}"))?;
 
@@ -96,6 +110,7 @@ impl Engine {
 
     /// Ask for the single best move within a node budget. Returns the UCI move string.
     pub fn best_move(&mut self, nodes: u32) -> io::Result<String> {
+        self.clear_hash()?;
         self.send(&format!("setoption name MultiPV value 1"))?;
         self.send(&format!("go nodes {nodes}"))?;
         loop {
@@ -120,6 +135,7 @@ impl Engine {
     /// Returns `(uci_move, centipawns)`.
     pub fn best_move_and_score(&mut self, nodes: u32) -> io::Result<(String, i32)> {
         use std::collections::HashMap;
+        self.clear_hash()?;
         self.send("setoption name MultiPV value 1")?;
         self.send(&format!("go nodes {nodes}"))?;
         let mut by_pv: HashMap<usize, (String, i32, u32)> = HashMap::new();

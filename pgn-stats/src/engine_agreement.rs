@@ -31,16 +31,19 @@ const STOCKFISH_PATH: &str = "/usr/local/bin/stockfish";
 struct Args {
     pgn_file: String,
     nodes: u32,
+    hash_mb: u32,
     min_ply: usize,
     event: Option<String>,
 }
 
 /// Default node budget matches lichess: lila/conf/base.conf `analysis.nodes = 1500000`.
 const DEFAULT_NODES: u32 = 1_500_000;
+const DEFAULT_HASH_MB: u32 = 256;
 
 fn parse_args() -> Args {
     let mut pgn_file: Option<String> = None;
     let mut nodes: u32 = DEFAULT_NODES;
+    let mut hash_mb: u32 = DEFAULT_HASH_MB;
     let mut min_ply: usize = 0;
     let mut event: Option<String> = None;
 
@@ -51,6 +54,11 @@ fn parse_args() -> Args {
                 nodes = args.next()
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| { eprintln!("--nodes requires a value"); std::process::exit(1); });
+            }
+            "--hash" | "-H" => {
+                hash_mb = args.next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| { eprintln!("--hash requires a value"); std::process::exit(1); });
             }
             "--min-ply" | "-m" => {
                 min_ply = args.next()
@@ -64,8 +72,9 @@ fn parse_args() -> Args {
                 }));
             }
             "--help" | "-h" => {
-                println!("Usage: engine_agreement <file.pgn> [--nodes N] [--min-ply N] [--event EVENT]");
+                println!("Usage: engine_agreement <file.pgn> [--nodes N] [--hash MB] [--min-ply N] [--event EVENT]");
                 println!("  --nodes N      Stockfish node budget per position (default: {DEFAULT_NODES})");
+                println!("  --hash MB      hash table size in MiB (default: {DEFAULT_HASH_MB})");
                 println!("  --min-ply N    skip first N half-moves of each game (default: 0)");
                 println!("  --event EVENT  only analyse games whose Event tag matches EVENT");
                 std::process::exit(0);
@@ -81,11 +90,11 @@ fn parse_args() -> Args {
     }
 
     let pgn_file = pgn_file.unwrap_or_else(|| {
-        eprintln!("Usage: engine_agreement <file.pgn> [--nodes N] [--min-ply N] [--event EVENT]");
+        eprintln!("Usage: engine_agreement <file.pgn> [--nodes N] [--hash MB] [--min-ply N] [--event EVENT]");
         std::process::exit(1);
     });
 
-    Args { pgn_file, nodes, min_ply, event }
+    Args { pgn_file, nodes, hash_mb, min_ply, event }
 }
 
 // ── Position key ──────────────────────────────────────────────────────────────
@@ -129,7 +138,7 @@ fn to_white_cp(score: i32, stm: Color) -> i32 {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
-    let Args { pgn_file, nodes, min_ply, event } = parse_args();
+    let Args { pgn_file, nodes, hash_mb, min_ply, event } = parse_args();
 
     let mut games = match read_games(&pgn_file) {
         Ok(g) => g,
@@ -152,6 +161,7 @@ fn main() -> io::Result<()> {
     // Print configuration
     println!("PGN file : {pgn_file}");
     println!("Nodes    : {nodes}");
+    println!("Hash     : {hash_mb} MiB");
     println!("Min ply  : {min_ply}");
     if let Some(ref event_str) = event {
         println!("Event    : {event_str}");
@@ -161,6 +171,7 @@ fn main() -> io::Result<()> {
 
     let mut engine = Engine::new(STOCKFISH_PATH)?;
     engine.init()?;
+    engine.set_hash(hash_mb)?;
 
     // ── Header ────────────────────────────────────────────────────────────────
     println!(
