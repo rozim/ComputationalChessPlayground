@@ -7,6 +7,7 @@ edition = "2024"
 pgn-reader = "0.29"
 pgnparse = "0.1"
 pgn-game-reader = { path = "../pgn-game-reader" }
+shakmaty = "0.30"
 
 [[bin]]
 name = "pgn-stats"
@@ -23,4 +24,8 @@ path = "src/game_reader.rs"
 [[bin]]
 name = "game-reader-demo"
 path = "src/game_reader_demo.rs"
+
+[[bin]]
+name = "game-reader-playthru"
+path = "src/game_reader_playthru.rs"
 
