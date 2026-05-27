@@ -131,3 +131,6 @@ dmypy.json
 *~
 shh
 #@#
+
+# Rust build artifacts
+target/
