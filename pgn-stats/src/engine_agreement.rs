@@ -30,24 +30,27 @@ const STOCKFISH_PATH: &str = "/usr/local/bin/stockfish";
 
 struct Args {
     pgn_file: String,
-    depth: u32,
+    nodes: u32,
     min_ply: usize,
     event: Option<String>,
 }
 
+/// Default node budget matches lichess: lila/conf/base.conf `analysis.nodes = 1500000`.
+const DEFAULT_NODES: u32 = 1_500_000;
+
 fn parse_args() -> Args {
     let mut pgn_file: Option<String> = None;
-    let mut depth: u32 = 15;
+    let mut nodes: u32 = DEFAULT_NODES;
     let mut min_ply: usize = 0;
     let mut event: Option<String> = None;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--depth" | "-d" => {
-                depth = args.next()
+            "--nodes" | "-n" => {
+                nodes = args.next()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or_else(|| { eprintln!("--depth requires a value"); std::process::exit(1); });
+                    .unwrap_or_else(|| { eprintln!("--nodes requires a value"); std::process::exit(1); });
             }
             "--min-ply" | "-m" => {
                 min_ply = args.next()
@@ -61,8 +64,8 @@ fn parse_args() -> Args {
                 }));
             }
             "--help" | "-h" => {
-                println!("Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N] [--event EVENT]");
-                println!("  --depth N      Stockfish search depth (default: 15)");
+                println!("Usage: engine_agreement <file.pgn> [--nodes N] [--min-ply N] [--event EVENT]");
+                println!("  --nodes N      Stockfish node budget per position (default: {DEFAULT_NODES})");
                 println!("  --min-ply N    skip first N half-moves of each game (default: 0)");
                 println!("  --event EVENT  only analyse games whose Event tag matches EVENT");
                 std::process::exit(0);
@@ -78,11 +81,11 @@ fn parse_args() -> Args {
     }
 
     let pgn_file = pgn_file.unwrap_or_else(|| {
-        eprintln!("Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N] [--event EVENT]");
+        eprintln!("Usage: engine_agreement <file.pgn> [--nodes N] [--min-ply N] [--event EVENT]");
         std::process::exit(1);
     });
 
-    Args { pgn_file, depth, min_ply, event }
+    Args { pgn_file, nodes, min_ply, event }
 }
 
 // ── Position key ──────────────────────────────────────────────────────────────
@@ -126,7 +129,7 @@ fn to_white_cp(score: i32, stm: Color) -> i32 {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
-    let Args { pgn_file, depth, min_ply, event } = parse_args();
+    let Args { pgn_file, nodes, min_ply, event } = parse_args();
 
     let mut games = match read_games(&pgn_file) {
         Ok(g) => g,
@@ -148,7 +151,7 @@ fn main() -> io::Result<()> {
 
     // Print configuration
     println!("PGN file : {pgn_file}");
-    println!("Depth    : {depth}");
+    println!("Nodes    : {nodes}");
     println!("Min ply  : {min_ply}");
     if let Some(ref event_str) = event {
         println!("Event    : {event_str}");
@@ -226,7 +229,7 @@ fn main() -> io::Result<()> {
         let mut cache: HashMap<String, (String, i32)> = HashMap::new();
         for fen in &fens_needed {
             engine.send(&format!("position fen {fen}"))?;
-            let (best, score) = engine.best_move_and_score(depth)?;
+            let (best, score) = engine.best_move_and_score(nodes)?;
             cache.insert(fen.clone(), (best, score));
         }
 

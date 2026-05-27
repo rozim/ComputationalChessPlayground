@@ -69,13 +69,13 @@ impl Engine {
         self.ensure_ready()
     }
 
-    /// Ask for top `n` moves at `depth`. Returns `Vec<(uci_move, centipawn_score)>`
+    /// Ask for top `n` moves within a node budget. Returns `Vec<(uci_move, centipawn_score)>`
     /// sorted best-first. Mate scores map to ±100 000 cp.
-    pub fn go_multipv(&mut self, depth: u32, n: usize) -> io::Result<Vec<(String, i32)>> {
+    pub fn go_multipv(&mut self, nodes: u32, n: usize) -> io::Result<Vec<(String, i32)>> {
         use std::collections::HashMap;
 
         self.send(&format!("setoption name MultiPV value {n}"))?;
-        self.send(&format!("go depth {depth}"))?;
+        self.send(&format!("go nodes {nodes}"))?;
 
         let mut by_pv: HashMap<usize, (String, i32, u32)> = HashMap::new();
 
@@ -94,10 +94,10 @@ impl Engine {
         Ok(moves)
     }
 
-    /// Ask for the single best move at `depth`. Returns the UCI move string.
-    pub fn best_move(&mut self, depth: u32) -> io::Result<String> {
+    /// Ask for the single best move within a node budget. Returns the UCI move string.
+    pub fn best_move(&mut self, nodes: u32) -> io::Result<String> {
         self.send(&format!("setoption name MultiPV value 1"))?;
-        self.send(&format!("go depth {depth}"))?;
+        self.send(&format!("go nodes {nodes}"))?;
         loop {
             let line = self.recv();
             if line.starts_with("bestmove") {
@@ -110,7 +110,7 @@ impl Engine {
         }
     }
 
-    /// Ask for the single best move and its centipawn score at `depth`.
+    /// Ask for the single best move and its centipawn score within a node budget.
     ///
     /// The score is from the **side-to-move's** perspective (positive = the
     /// moving side is better), matching raw Stockfish UCI output.  The caller
@@ -118,10 +118,10 @@ impl Engine {
     /// white-perspective score is needed.
     ///
     /// Returns `(uci_move, centipawns)`.
-    pub fn best_move_and_score(&mut self, depth: u32) -> io::Result<(String, i32)> {
+    pub fn best_move_and_score(&mut self, nodes: u32) -> io::Result<(String, i32)> {
         use std::collections::HashMap;
         self.send("setoption name MultiPV value 1")?;
-        self.send(&format!("go depth {depth}"))?;
+        self.send(&format!("go nodes {nodes}"))?;
         let mut by_pv: HashMap<usize, (String, i32, u32)> = HashMap::new();
         loop {
             let line = self.recv();

@@ -5,8 +5,8 @@
 /// "near-best". One of those is chosen at random (uniform), so the best move
 /// is always a candidate but not always played.
 ///
-/// Usage: stockfish-variety [--depth N] [--threshold N]
-///   --depth N      search depth per move (default: 5)
+/// Usage: stockfish-variety [--nodes N] [--threshold N]
+///   --nodes N      Stockfish node budget per move (default: 1500000)
 ///   --threshold N  centipawn window for near-best moves (default: 25)
 
 use std::env;
@@ -21,22 +21,24 @@ const MULTI_PV: usize = 5;
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 
+const DEFAULT_NODES: u32 = 1_500_000;
+
 struct Args {
-    depth: u32,
+    nodes: u32,
     threshold: i32,
 }
 
 fn parse_args() -> Args {
-    let mut depth: u32 = 5;
+    let mut nodes: u32 = DEFAULT_NODES;
     let mut threshold: i32 = 25;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--depth" | "-d" => {
-                depth = args.next()
+            "--nodes" | "-n" => {
+                nodes = args.next()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or_else(|| { eprintln!("--depth requires a value"); std::process::exit(1); });
+                    .unwrap_or_else(|| { eprintln!("--nodes requires a value"); std::process::exit(1); });
             }
             "--threshold" | "-t" => {
                 threshold = args.next()
@@ -44,8 +46,8 @@ fn parse_args() -> Args {
                     .unwrap_or_else(|| { eprintln!("--threshold requires a value"); std::process::exit(1); });
             }
             "--help" | "-h" => {
-                println!("Usage: stockfish-variety [--depth N] [--threshold N]");
-                println!("  --depth N      search depth per move (default: 5)");
+                println!("Usage: stockfish-variety [--nodes N] [--threshold N]");
+                println!("  --nodes N      Stockfish node budget per move (default: {DEFAULT_NODES})");
                 println!("  --threshold N  centipawn window for near-best moves (default: 25)");
                 std::process::exit(0);
             }
@@ -56,13 +58,13 @@ fn parse_args() -> Args {
         }
     }
 
-    Args { depth, threshold }
+    Args { nodes, threshold }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
-    let Args { depth, threshold } = parse_args();
+    let Args { nodes, threshold } = parse_args();
 
     let mut engine = Engine::new(STOCKFISH_PATH)?;
     engine.init()?;
@@ -77,11 +79,11 @@ fn main() -> io::Result<()> {
     let mut best_moves = [0usize; 2];
     let mut non_best_moves = [0usize; 2];
 
-    println!("Stockfish variety (depth={depth}, multi_pv={MULTI_PV}, threshold={threshold}cp)");
+    println!("Stockfish variety (nodes={nodes}, multi_pv={MULTI_PV}, threshold={threshold}cp)");
     println!();
 
     loop {
-        let candidates = engine.go_multipv(depth, MULTI_PV)?;
+        let candidates = engine.go_multipv(nodes, MULTI_PV)?;
         if candidates.is_empty() {
             break;
         }
