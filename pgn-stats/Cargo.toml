@@ -20,3 +20,7 @@ path = "src/pgnparse.rs"
 name = "pgn-stats-game-reader"
 path = "src/game_reader.rs"
 
+[[bin]]
+name = "game-reader-demo"
+path = "src/game_reader_demo.rs"
+
