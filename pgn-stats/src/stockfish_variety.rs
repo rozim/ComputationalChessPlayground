@@ -5,7 +5,9 @@
 /// "near-best". One of those is chosen at random (uniform), so the best move
 /// is always a candidate but not always played.
 ///
-/// Usage: stockfish-variety [threshold_cp]   (default threshold: 25)
+/// Usage: stockfish-variety [--depth N] [--threshold N]
+///   --depth N      search depth per move (default: 5)
+///   --threshold N  centipawn window for near-best moves (default: 25)
 
 use std::collections::HashMap;
 use std::env;
@@ -18,7 +20,6 @@ use rand::seq::IndexedRandom;
 use shakmaty::{Chess, Color, KnownOutcome, Outcome, Position, san::San, uci::UciMove};
 
 const STOCKFISH_PATH: &str = "/usr/local/bin/stockfish";
-const DEPTH: u32 = 5;
 const MULTI_PV: usize = 5;
 
 // ── Minimal UCI engine wrapper ────────────────────────────────────────────────
@@ -155,13 +156,50 @@ fn parse_info_line(line: &str, by_pv: &mut HashMap<usize, (String, i32, u32)>) {
     }
 }
 
+// ── Arg parsing ───────────────────────────────────────────────────────────────
+
+struct Args {
+    depth: u32,
+    threshold: i32,
+}
+
+fn parse_args() -> Args {
+    let mut depth: u32 = 5;
+    let mut threshold: i32 = 25;
+
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--depth" | "-d" => {
+                depth = args.next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| { eprintln!("--depth requires a value"); std::process::exit(1); });
+            }
+            "--threshold" | "-t" => {
+                threshold = args.next()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| { eprintln!("--threshold requires a value"); std::process::exit(1); });
+            }
+            "--help" | "-h" => {
+                println!("Usage: stockfish-variety [--depth N] [--threshold N]");
+                println!("  --depth N      search depth per move (default: 5)");
+                println!("  --threshold N  centipawn window for near-best moves (default: 25)");
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("Unknown argument: {other}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    Args { depth, threshold }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
-    let threshold: i32 = env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(25);
+    let Args { depth, threshold } = parse_args();
 
     let mut engine = Engine::new(STOCKFISH_PATH)?;
 
@@ -178,11 +216,11 @@ fn main() -> io::Result<()> {
     let mut move_number = 1;
     let mut rng = rand::rng();
 
-    println!("Stockfish variety (depth={DEPTH}, multi_pv={MULTI_PV}, threshold={threshold}cp)");
+    println!("Stockfish variety (depth={depth}, multi_pv={MULTI_PV}, threshold={threshold}cp)");
     println!();
 
     loop {
-        let candidates = engine.go_multipv(DEPTH, MULTI_PV)?;
+        let candidates = engine.go_multipv(depth, MULTI_PV)?;
         if candidates.is_empty() {
             break;
         }
