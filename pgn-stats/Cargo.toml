@@ -5,4 +5,13 @@ edition = "2024"
 
 [dependencies]
 pgn-reader = "0.29"
+pgnparse = "0.1"
+
+[[bin]]
+name = "pgn-stats"
+path = "src/main.rs"
+
+[[bin]]
+name = "pgn-stats-pgnparse"
+path = "src/pgnparse.rs"
 
