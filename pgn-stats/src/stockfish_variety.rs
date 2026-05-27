@@ -216,6 +216,10 @@ fn main() -> io::Result<()> {
     let mut move_number = 1;
     let mut rng = rand::rng();
 
+    // best_moves[0] = white, [1] = black
+    let mut best_moves = [0usize; 2];
+    let mut non_best_moves = [0usize; 2];
+
     println!("Stockfish variety (depth={depth}, multi_pv={MULTI_PV}, threshold={threshold}cp)");
     println!();
 
@@ -237,6 +241,14 @@ fn main() -> io::Result<()> {
             .choose(&mut rng)
             .expect("at least one candidate");
         let uci_str = &chosen.0;
+
+        // Track best vs non-best for each player.
+        let player = pos.turn() as usize; // White=0, Black=1
+        if uci_str == &candidates[0].0 {
+            best_moves[player] += 1;
+        } else {
+            non_best_moves[player] += 1;
+        }
 
         // Resolve to a shakmaty move and format as SAN.
         let uci_move: UciMove = uci_str.parse().unwrap_or_else(|e| {
@@ -278,6 +290,11 @@ fn main() -> io::Result<()> {
         Outcome::Known(KnownOutcome::Draw) => println!("Result: 1/2-1/2"),
         _ => println!("Result: *"),
     }
+
+    println!();
+    println!("{:<10}  {:>9}  {:>9}", "", "best", "non-best");
+    println!("{:<10}  {:>9}  {:>9}", "White", best_moves[0], non_best_moves[0]);
+    println!("{:<10}  {:>9}  {:>9}", "Black", best_moves[1], non_best_moves[1]);
 
     engine.quit()
 }
