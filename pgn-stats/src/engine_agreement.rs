@@ -5,7 +5,7 @@
 /// occurrence of each (pieces + turn + castling) triplet is evaluated.
 /// The first `min_ply` half-moves of each game are skipped.
 ///
-/// Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N]
+/// Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N] [--event EVENT]
 
 use std::collections::HashMap;
 use std::env;
@@ -28,12 +28,14 @@ struct Args {
     pgn_file: String,
     depth: u32,
     min_ply: usize,
+    event: Option<String>,
 }
 
 fn parse_args() -> Args {
     let mut pgn_file: Option<String> = None;
     let mut depth: u32 = 15;
     let mut min_ply: usize = 0;
+    let mut event: Option<String> = None;
 
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -48,10 +50,17 @@ fn parse_args() -> Args {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or_else(|| { eprintln!("--min-ply requires a value"); std::process::exit(1); });
             }
+            "--event" | "-e" => {
+                event = Some(args.next().unwrap_or_else(|| {
+                    eprintln!("--event requires a value");
+                    std::process::exit(1);
+                }));
+            }
             "--help" | "-h" => {
-                println!("Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N]");
-                println!("  --depth N    Stockfish search depth (default: 15)");
-                println!("  --min-ply N  skip first N half-moves of each game (default: 0)");
+                println!("Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N] [--event EVENT]");
+                println!("  --depth N      Stockfish search depth (default: 15)");
+                println!("  --min-ply N    skip first N half-moves of each game (default: 0)");
+                println!("  --event EVENT  only analyse games whose Event tag matches EVENT");
                 std::process::exit(0);
             }
             other if !other.starts_with('-') => {
@@ -65,11 +74,11 @@ fn parse_args() -> Args {
     }
 
     let pgn_file = pgn_file.unwrap_or_else(|| {
-        eprintln!("Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N]");
+        eprintln!("Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N] [--event EVENT]");
         std::process::exit(1);
     });
 
-    Args { pgn_file, depth, min_ply }
+    Args { pgn_file, depth, min_ply, event }
 }
 
 // ── Position key ──────────────────────────────────────────────────────────────
@@ -99,12 +108,20 @@ struct PosRecord {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
-    let Args { pgn_file, depth, min_ply } = parse_args();
+    let Args { pgn_file, depth, min_ply, event } = parse_args();
 
-    let games = match read_games(&pgn_file) {
+    let mut games = match read_games(&pgn_file) {
         Ok(g) => g,
         Err(e) => { eprintln!("Error reading {pgn_file}: {e}"); std::process::exit(1); }
     };
+
+    if let Some(ref event_str) = event {
+        games.retain(|g| g.tags.get("Event").map(|e| e == event_str).unwrap_or(false));
+        if games.is_empty() {
+            eprintln!("No games found with Event = \"{event_str}\" in {pgn_file}");
+            std::process::exit(1);
+        }
+    }
 
     if games.is_empty() {
         eprintln!("No games found in {pgn_file}");
