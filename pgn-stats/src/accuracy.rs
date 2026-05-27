@@ -88,6 +88,11 @@ fn harmonic_mean(xs: &[f64]) -> Option<f64> {
 /// `start_color_is_white` — `true` when white made the first move (the normal
 /// case).
 ///
+/// `initial_cp` — engine evaluation (from white's perspective, in centipawns)
+/// of the position **before** the first move in `cps`.  Use [`INITIAL_CP`] for
+/// a standard game starting from move 1; use the actual Stockfish score when
+/// `--min-ply` skips the opening.
+///
 /// `cps` — engine evaluation **after each half-move**, from white's
 /// perspective, in centipawns.  One entry per ply.
 ///
@@ -95,9 +100,9 @@ fn harmonic_mean(xs: &[f64]) -> Option<f64> {
 /// `None` if there is insufficient data (fewer than two positions).
 ///
 /// Algorithm: direct port of `AccuracyPercent.gameAccuracy` from lila.
-pub fn game_accuracy(start_color_is_white: bool, cps: &[i32]) -> Option<(f64, f64)> {
-    // Prepend the starting-position evaluation, then convert to win percents.
-    let all_wp: Vec<f64> = std::iter::once(INITIAL_CP)
+pub fn game_accuracy(start_color_is_white: bool, initial_cp: i32, cps: &[i32]) -> Option<(f64, f64)> {
+    // Prepend the initial-position evaluation, then convert to win percents.
+    let all_wp: Vec<f64> = std::iter::once(initial_cp)
         .chain(cps.iter().copied())
         .map(win_percent_from_cp)
         .collect();
@@ -359,13 +364,13 @@ mod tests {
 
     #[test]
     fn game_accuracy_empty_is_none() {
-        assert!(game_accuracy(true, &[]).is_none());
+        assert!(game_accuracy(true, INITIAL_CP, &[]).is_none());
     }
 
     #[test]
     fn game_accuracy_one_move_is_none() {
         // Only one half-move means black never moved → no data for black → None.
-        assert!(game_accuracy(true, &[0]).is_none());
+        assert!(game_accuracy(true, INITIAL_CP, &[0]).is_none());
     }
 
     #[test]
@@ -373,7 +378,7 @@ mod tests {
         // All positions at Cp.initial: every consecutive pair is equal,
         // so every move scores 100 %.
         let cps = vec![INITIAL_CP; 40];
-        let (wa, ba) = game_accuracy(true, &cps).unwrap();
+        let (wa, ba) = game_accuracy(true, INITIAL_CP, &cps).unwrap();
         assert!((wa - 100.0).abs() < EPS, "white = {wa}");
         assert!((ba - 100.0).abs() < EPS, "black = {ba}");
     }
@@ -382,7 +387,7 @@ mod tests {
     fn game_accuracy_result_in_range() {
         // Both outputs must be in [0, 100].
         let cps: Vec<i32> = (0..30).map(|i| (i * 17 % 200) - 100).collect();
-        let (wa, ba) = game_accuracy(true, &cps).unwrap();
+        let (wa, ba) = game_accuracy(true, INITIAL_CP, &cps).unwrap();
         assert!(wa >= 0.0 && wa <= 100.0, "white = {wa}");
         assert!(ba >= 0.0 && ba <= 100.0, "black = {ba}");
     }
@@ -393,7 +398,7 @@ mod tests {
         // position at -900 so black keeps the advantage without blundering back.
         // White's accuracy should drop well below black's.
         let cps = vec![-900i32; 40];
-        let (wa, ba) = game_accuracy(true, &cps).unwrap();
+        let (wa, ba) = game_accuracy(true, INITIAL_CP, &cps).unwrap();
         assert!(wa < ba, "expected white ({wa:.1}) < black ({ba:.1}) after white blunder");
         assert!(wa < 80.0, "white accuracy should drop noticeably: {wa}");
     }
@@ -405,7 +410,7 @@ mod tests {
         let mut cps = vec![900i32; 40];
         cps[0] = -900; // After white's move 1 it's bad for white.
         // cps[1] = 900: black blunders, giving back all the advantage.
-        let (wa, ba) = game_accuracy(true, &cps).unwrap();
+        let (wa, ba) = game_accuracy(true, INITIAL_CP, &cps).unwrap();
         assert!(ba < wa, "expected black ({ba:.1}) < white ({wa:.1}) after black blunder");
         assert!(ba < 80.0, "black accuracy should drop noticeably: {ba}");
     }
@@ -416,8 +421,8 @@ mod tests {
         // to each move.  For a non-trivial game the outputs should differ.
         let cps: Vec<i32> = vec![-100, 100, -50, 150, 0, -200, 80, -80, 300, -300,
                                   -100, 100, -50, 150, 0, -200, 80, -80, 300, -300];
-        let (wa_t, ba_t) = game_accuracy(true,  &cps).unwrap();
-        let (wa_f, ba_f) = game_accuracy(false, &cps).unwrap();
+        let (wa_t, ba_t) = game_accuracy(true,  INITIAL_CP, &cps).unwrap();
+        let (wa_f, ba_f) = game_accuracy(false, INITIAL_CP, &cps).unwrap();
         assert!(
             (wa_t - wa_f).abs() > 0.01 || (ba_t - ba_f).abs() > 0.01,
             "start_color had no effect: ({wa_t:.3},{ba_t:.3}) vs ({wa_f:.3},{ba_f:.3})"

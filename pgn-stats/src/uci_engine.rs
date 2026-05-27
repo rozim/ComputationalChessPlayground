@@ -109,6 +109,35 @@ impl Engine {
             }
         }
     }
+
+    /// Ask for the single best move and its centipawn score at `depth`.
+    ///
+    /// The score is from the **side-to-move's** perspective (positive = the
+    /// moving side is better), matching raw Stockfish UCI output.  The caller
+    /// is responsible for negating when the side to move is black if a
+    /// white-perspective score is needed.
+    ///
+    /// Returns `(uci_move, centipawns)`.
+    pub fn best_move_and_score(&mut self, depth: u32) -> io::Result<(String, i32)> {
+        use std::collections::HashMap;
+        self.send("setoption name MultiPV value 1")?;
+        self.send(&format!("go depth {depth}"))?;
+        let mut by_pv: HashMap<usize, (String, i32, u32)> = HashMap::new();
+        loop {
+            let line = self.recv();
+            if line.starts_with("bestmove") {
+                let best = line.split_ascii_whitespace()
+                    .nth(1)
+                    .unwrap_or("none")
+                    .to_owned();
+                let score = by_pv.get(&1).map(|(_, s, _)| *s).unwrap_or(0);
+                return Ok((best, score));
+            }
+            if !line.contains("lowerbound") && !line.contains("upperbound") {
+                parse_info_line(&line, &mut by_pv);
+            }
+        }
+    }
 }
 
 /// Parse a single `info … multipv … score … pv …` line, updating `by_pv`.

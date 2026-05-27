@@ -1,17 +1,21 @@
 /// engine_agreement: for every game in a PGN file, compute how often each
-/// player's moves matched Stockfish's best move at a given depth.
+/// player's moves matched Stockfish's best move at a given depth, and what
+/// each player's accuracy percentage was (lichess method).
 ///
-/// Repeated positions within a game are deduplicated — only the last
-/// occurrence of each (pieces + turn + castling) triplet is evaluated.
-/// The first `min_ply` half-moves of each game are skipped.
+/// Repeated positions within a game are deduplicated for engine-agreement —
+/// only the last occurrence of each (pieces + turn + castling) triplet is
+/// counted.  Accuracy uses every position in sequence.
+///
+/// The first `min_ply` half-moves of each game are skipped for both metrics.
 ///
 /// Usage: engine_agreement <file.pgn> [--depth N] [--min-ply N] [--event EVENT]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io;
 
 use pgn_game_reader::read_games;
+use pgn_stats::accuracy::{game_accuracy, INITIAL_CP};
 use pgn_stats::uci_engine::Engine;
 use shakmaty::{
     CastlingMode, Chess, Color, EnPassantMode, Position,
@@ -97,12 +101,26 @@ fn position_key(pos: &Chess) -> String {
     )
 }
 
-// ── Per-position record ───────────────────────────────────────────────────────
+// ── Per-position records ──────────────────────────────────────────────────────
 
-struct PosRecord {
-    full_fen: String,   // for Stockfish
-    color: Color,       // side that moved
-    actual_uci: String, // what was actually played
+/// One entry in the agreement dedup map (last occurrence of each position key).
+struct AgreementRecord {
+    full_fen: String,
+    color: Color,
+    actual_uci: String,
+}
+
+/// One entry in the ordered accuracy sequence.
+struct SeqRecord {
+    full_fen: String,
+    stm: Color, // side to move at this position
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Normalise a Stockfish score (side-to-move perspective) to white's perspective.
+fn to_white_cp(score: i32, stm: Color) -> i32 {
+    if stm == Color::White { score } else { -score }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -141,10 +159,11 @@ fn main() -> io::Result<()> {
     let mut engine = Engine::new(STOCKFISH_PATH)?;
     engine.init()?;
 
-    // Header
+    // ── Header ────────────────────────────────────────────────────────────────
     println!(
-        "{:>5}  {:<30} {:<30}  {:<7}  {:>12}  {:>12}",
-        "Round", "White", "Black", "Result", "White agree", "Black agree"
+        "{:>5}  {:<30} {:<30}  {:<7}  {:>15}  {:>7}  {:>15}  {:>7}",
+        "Round", "White", "Black", "Result",
+        "White match", "W acc%", "Black match", "B acc%"
     );
     println!("{}", "-".repeat(107));
 
@@ -167,59 +186,107 @@ fn main() -> io::Result<()> {
             Chess::default()
         };
 
-        // Walk through the game, building a map of unique positions -> last move played.
-        // key: position_key (pieces + turn + castling)
-        // value: PosRecord (full FEN, color, actual UCI move)
-        let mut positions: HashMap<String, PosRecord> = HashMap::new();
+        // Walk through the game, collecting:
+        //   `agreement` — one record per unique position key (last occurrence),
+        //                 for engine-agreement %.
+        //   `seq`       — every position in move order from min_ply onwards,
+        //                 for accuracy calculation.
+        let mut agreement: HashMap<String, AgreementRecord> = HashMap::new();
+        let mut seq: Vec<SeqRecord> = Vec::new();
 
         for (ply, san_str) in game.moves.iter().enumerate() {
-            let san: San = match san_str.parse() {
-                Ok(s) => s,
-                Err(_) => break,
-            };
-            let m = match san.to_move(&pos) {
-                Ok(m) => m,
-                Err(_) => break,
-            };
+            let san: San = match san_str.parse() { Ok(s) => s, Err(_) => break };
+            let m = match san.to_move(&pos) { Ok(m) => m, Err(_) => break };
 
             if ply >= min_ply {
-                let key = position_key(&pos);
+                let key      = position_key(&pos);
                 let full_fen = Fen::from_position(&pos, EnPassantMode::Legal).to_string();
                 let actual_uci = UciMove::from_move(m.clone(), CastlingMode::Standard).to_string();
-                // Overwrite — last occurrence wins.
-                positions.insert(key, PosRecord { full_fen, color: pos.turn(), actual_uci });
+                let stm = pos.turn();
+                agreement.insert(key, AgreementRecord { full_fen: full_fen.clone(), color: stm, actual_uci });
+                seq.push(SeqRecord { full_fen, stm });
             }
 
             pos.play_unchecked(m);
         }
 
-        // Query Stockfish for each unique position.
-        let mut counts = [[0usize; 2]; 2]; // counts[color][0=total, 1=best]
+        // FEN of the final position (after the last move) — needed to close the
+        // accuracy sequence.
+        let final_fen = Fen::from_position(&pos, EnPassantMode::Legal).to_string();
+        let final_stm = pos.turn();
 
-        for record in positions.values() {
-            engine.send(&format!("position fen {}", record.full_fen))?;
-            let best = engine.best_move(depth)?;
+        // ── Query Stockfish ───────────────────────────────────────────────────
+        // Build the set of unique FENs that need evaluation, then query each once.
+        let mut fens_needed: HashSet<String> = HashSet::new();
+        for rec in agreement.values() { fens_needed.insert(rec.full_fen.clone()); }
+        for rec in &seq               { fens_needed.insert(rec.full_fen.clone()); }
+        if !seq.is_empty()            { fens_needed.insert(final_fen.clone()); }
 
-            let c = record.color as usize; // White=0, Black=1
-            counts[c][0] += 1;
-            if record.actual_uci == best {
-                counts[c][1] += 1;
+        // cache: FEN → (best_uci_move, score_from_stm_perspective)
+        let mut cache: HashMap<String, (String, i32)> = HashMap::new();
+        for fen in &fens_needed {
+            engine.send(&format!("position fen {fen}"))?;
+            let (best, score) = engine.best_move_and_score(depth)?;
+            cache.insert(fen.clone(), (best, score));
+        }
+
+        // ── Engine agreement ──────────────────────────────────────────────────
+        // counts[color][0] = total positions; counts[color][1] = best-move matches
+        let mut counts = [[0usize; 2]; 2];
+        for rec in agreement.values() {
+            if let Some((best, _)) = cache.get(&rec.full_fen) {
+                let c = rec.color as usize;
+                counts[c][0] += 1;
+                if rec.actual_uci == *best { counts[c][1] += 1; }
             }
         }
 
-        let pct = |c: usize| -> String {
+        let match_str = |c: usize| -> String {
             let total = counts[c][0];
-            let best  = counts[c][1];
-            if total == 0 {
-                "  n/a".to_owned()
-            } else {
-                format!("{:.1}% ({}/{})", 100.0 * best as f64 / total as f64, best, total)
+            let hits  = counts[c][1];
+            if total == 0 { "n/a".to_owned() }
+            else { format!("{:.1}% ({}/{})", 100.0 * hits as f64 / total as f64, hits, total) }
+        };
+
+        // ── Accuracy ─────────────────────────────────────────────────────────
+        let (white_acc, black_acc) = if seq.len() >= 2 {
+            // initial_cp: score of the position before the first included move.
+            let initial_cp = cache.get(&seq[0].full_fen)
+                .map(|(_, s)| to_white_cp(*s, seq[0].stm))
+                .unwrap_or(INITIAL_CP);
+
+            // cps: white-perspective scores after each included move
+            //      = score of position before the *next* move
+            //      = seq[1], seq[2], ..., seq[N-1], final
+            let cps: Vec<i32> = seq[1..].iter()
+                .filter_map(|r| cache.get(&r.full_fen).map(|(_, s)| to_white_cp(*s, r.stm)))
+                .chain(
+                    cache.get(&final_fen)
+                         .map(|(_, s)| to_white_cp(*s, final_stm))
+                )
+                .collect();
+
+            let start_white = seq[0].stm == Color::White;
+            match game_accuracy(start_white, initial_cp, &cps) {
+                Some((wa, ba)) => (Some(wa), Some(ba)),
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
+        let acc_str = |a: Option<f64>| -> String {
+            match a {
+                Some(v) => format!("{:.1}%", v),
+                None    => "n/a".to_owned(),
             }
         };
 
         println!(
-            "{:>5}  {:<30} {:<30}  {:<7}  {:>12}  {:>12}",
-            round, white, black, result, pct(0), pct(1)
+            "{:>5}  {:<30} {:<30}  {:<7}  {:>15}  {:>7}  {:>15}  {:>7}",
+            round, white, black, result,
+            match_str(0), acc_str(white_acc),
+            match_str(1), acc_str(black_acc),
         );
     }
 
