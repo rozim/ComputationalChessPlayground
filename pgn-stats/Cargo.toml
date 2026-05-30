@@ -43,3 +43,7 @@ path = "src/engine_agreement.rs"
 name = "stockfish-variety"
 path = "src/stockfish_variety.rs"
 
+[[bin]]
+name = "maia3-demo"
+path = "src/maia3_demo.rs"
+
