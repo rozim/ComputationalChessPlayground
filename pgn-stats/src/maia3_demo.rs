@@ -1,6 +1,7 @@
-/// maia3-demo: for every game in a PGN file, query maia3 at each ELO setting
-/// for every move (from `--min_ply` onwards) and report how often each ELO's
-/// best move matched the move actually played.
+/// maia3-demo: for every game in a PGN file, query both maia3 (at each ELO)
+/// and Stockfish (at each configured node budget) for every move from
+/// `--min_ply` onwards and report how often each engine's best move matched
+/// the move actually played.
 ///
 /// Usage: maia3-demo [--min_ply N] <file.pgn>
 
@@ -17,8 +18,18 @@ use shakmaty::{
 };
 
 const MAIA3_PATH: &str = "/Users/dave/venv-maia3/bin/maia3-23m";
-const NODES: u32 = 1;
+const STOCKFISH_PATH: &str = "/usr/local/bin/stockfish";
+
+const MAIA3_NODES: u32 = 1;
 const ELOS: &[u32] = &[1200, 1600, 1800, 2000, 2200, 2400, 2600, 2800];
+
+// Stockfish (name, nodes). Names appear in the column header and accuracy summary.
+const STOCKFISH_RUNS: &[(&str, u32)] = &[
+    ("1k",   1_000),
+    ("10k",  10_000),
+    ("100k", 100_000),
+    ("1M",   1_000_000),
+];
 
 const DEFAULT_MIN_PLY: usize = 10;
 
@@ -79,6 +90,18 @@ fn parse_args() -> Args {
     Args { pgn_file, min_ply }
 }
 
+/// Get a SAN-rendered prediction for `pos` from `engine`, after caller has
+/// already issued the appropriate `position fen ...` and any per-engine
+/// option-setting.
+fn predict_san(engine: &mut Engine, pos: &Chess, nodes: u32) -> io::Result<(String, String)> {
+    let best_uci = engine.best_move(nodes)?;
+    let san = best_uci.parse::<UciMove>().ok()
+        .and_then(|um| um.to_move(pos).ok())
+        .map(|pm| San::from_move(pos, pm).to_string())
+        .unwrap_or_else(|| best_uci.clone());
+    Ok((best_uci, san))
+}
+
 fn main() -> io::Result<()> {
     let Args { pgn_file, min_ply } = parse_args();
 
@@ -91,18 +114,30 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    println!("PGN file : {pgn_file}");
-    println!("Engine   : {MAIA3_PATH}");
-    println!("Nodes    : {NODES}");
-    println!("Min ply  : {min_ply}");
-    println!("ELOs     : {ELOS:?}");
-    println!("Games    : {}", games.len());
+    println!("PGN file   : {pgn_file}");
+    println!("Maia3      : {MAIA3_PATH}");
+    println!("Stockfish  : {STOCKFISH_PATH}");
+    println!("Min ply    : {min_ply}");
+    println!("Maia3 ELOs : {ELOS:?}");
+    print!  ("SF runs    : [");
+    for (idx, (name, nodes)) in STOCKFISH_RUNS.iter().enumerate() {
+        if idx > 0 { print!(", "); }
+        print!("{name}={nodes}");
+    }
+    println!("]");
+    println!("Games      : {}", games.len());
     println!();
 
-    let mut engine = Engine::new(MAIA3_PATH)?;
-    engine.init()?;
-    engine.send("setoption name MultiPV value 1")?;
-    engine.ensure_ready()?;
+    // ── Spin up engines ─────────────────────────────────────────────────────
+    let mut maia = Engine::new(MAIA3_PATH)?;
+    maia.init()?;
+    maia.send("setoption name MultiPV value 1")?;
+    maia.ensure_ready()?;
+
+    let mut sf = Engine::new(STOCKFISH_PATH)?;
+    sf.init()?;
+    sf.send("setoption name MultiPV value 1")?;
+    sf.ensure_ready()?;
 
     for (gidx, game) in games.iter().enumerate() {
         let white  = game.tags.get("White").map(|s| s.as_str()).unwrap_or("?");
@@ -123,17 +158,17 @@ fn main() -> io::Result<()> {
             Chess::default()
         };
 
-        // Per-ELO totals & matches for this game.
-        let mut totals: Vec<usize> = vec![0; ELOS.len()];
-        let mut matches: Vec<usize> = vec![0; ELOS.len()];
+        // Per-engine-cell totals & matches for this game.
+        let mut elo_totals  = vec![0usize; ELOS.len()];
+        let mut elo_matches = vec![0usize; ELOS.len()];
+        let mut sf_totals   = vec![0usize; STOCKFISH_RUNS.len()];
+        let mut sf_matches  = vec![0usize; STOCKFISH_RUNS.len()];
 
-        // Print column header: ply, played, then one column per ELO.
-        // Per-ELO cell width = 2 leading + 7 SAN + 1 marker = 10 chars.
+        // Header. Each engine-cell = 10 chars (2 leading + 7 SAN + 1 marker).
         print!("  {:>4}  {:<8}", "ply", "played");
         for elo in ELOS { print!("  {:>7} ", elo); }
+        for (name, _) in STOCKFISH_RUNS { print!("  {:>7} ", name); }
         println!();
-
-        let mut played_uci_history: Vec<String> = Vec::new();
 
         for (ply, san_str) in game.moves.iter().enumerate() {
             let san: San = match san_str.parse() { Ok(s) => s, Err(_) => break };
@@ -142,33 +177,49 @@ fn main() -> io::Result<()> {
             let actual_san = San::from_move(&pos, m.clone()).to_string();
 
             if ply >= min_ply {
-                // Position the engine at the current FEN.
                 let fen = Fen::from_position(&pos, shakmaty::EnPassantMode::Legal).to_string();
-                engine.send(&format!("position fen {fen}"))?;
 
-                let mut preds_san: Vec<String> = Vec::with_capacity(ELOS.len());
+                // ── maia3 sweep ────────────────────────────────────────────
+                maia.send(&format!("position fen {fen}"))?;
+                let mut maia_preds: Vec<String> = Vec::with_capacity(ELOS.len());
                 for (eidx, &elo) in ELOS.iter().enumerate() {
-                    engine.send(&format!("setoption name Elo value {elo}"))?;
-                    engine.ensure_ready()?;
-                    let best_uci = engine.best_move(NODES)?;
-                    if best_uci == actual_uci {
-                        matches[eidx] += 1;
-                    }
-                    totals[eidx] += 1;
-
-                    // Convert engine's UCI prediction to SAN relative to current pos.
-                    let san_pred = best_uci.parse::<UciMove>().ok()
-                        .and_then(|um| um.to_move(&pos).ok())
-                        .map(|pm| San::from_move(&pos, pm).to_string())
-                        .unwrap_or(best_uci);
-                    preds_san.push(san_pred);
+                    maia.send(&format!("setoption name Elo value {elo}"))?;
+                    maia.ensure_ready()?;
+                    let (best_uci, best_san) = predict_san(&mut maia, &pos, MAIA3_NODES)?;
+                    if best_uci == actual_uci { elo_matches[eidx] += 1; }
+                    elo_totals[eidx] += 1;
+                    maia_preds.push(best_san);
                 }
 
+                // ── Stockfish sweep ────────────────────────────────────────
+                sf.send(&format!("position fen {fen}"))?;
+                let mut sf_preds: Vec<String> = Vec::with_capacity(STOCKFISH_RUNS.len());
+                for (sidx, (_name, nodes)) in STOCKFISH_RUNS.iter().enumerate() {
+                    let (best_uci, best_san) = predict_san(&mut sf, &pos, *nodes)?;
+                    if best_uci == actual_uci { sf_matches[sidx] += 1; }
+                    sf_totals[sidx] += 1;
+                    sf_preds.push(best_san);
+                }
+
+                // ── Emit row ───────────────────────────────────────────────
                 print!("  {:>4}  {:<8}", ply, actual_san);
+
+                // maia3 columns: collapse runs to "." per spec.
                 let mut prev: Option<&String> = None;
-                for p in &preds_san {
+                for p in &maia_preds {
                     if prev == Some(p) {
-                        // Same as previous ELO's prediction — print a single ".".
+                        print!("  {:>7} ", ".");
+                    } else {
+                        let marker = if p == &actual_san { "*" } else { " " };
+                        print!("  {:>7}{}", p, marker);
+                    }
+                    prev = Some(p);
+                }
+
+                // Stockfish columns: collapse runs to "." per spec.
+                let mut prev: Option<&String> = None;
+                for p in &sf_preds {
+                    if prev == Some(p) {
                         print!("  {:>7} ", ".");
                     } else {
                         let marker = if p == &actual_san { "*" } else { " " };
@@ -180,24 +231,34 @@ fn main() -> io::Result<()> {
             }
 
             pos.play_unchecked(m);
-            played_uci_history.push(actual_uci);
         }
 
         // Per-game accuracy summary.
         println!();
         println!("  Accuracy:");
         for (eidx, &elo) in ELOS.iter().enumerate() {
-            let t = totals[eidx];
-            let h = matches[eidx];
+            let t = elo_totals[eidx];
+            let h = elo_matches[eidx];
             if t == 0 {
-                println!("    Elo {:>4}: n/a", elo);
+                println!("    Maia3 {:>4}     : n/a", elo);
             } else {
-                println!("    Elo {:>4}: {:>5.1}% ({}/{})",
+                println!("    Maia3 {:>4}     : {:>5.1}% ({}/{})",
                          elo, 100.0 * h as f64 / t as f64, h, t);
+            }
+        }
+        for (sidx, (name, _)) in STOCKFISH_RUNS.iter().enumerate() {
+            let t = sf_totals[sidx];
+            let h = sf_matches[sidx];
+            if t == 0 {
+                println!("    Stockfish {:<4} : n/a", name);
+            } else {
+                println!("    Stockfish {:<4} : {:>5.1}% ({}/{})",
+                         name, 100.0 * h as f64 / t as f64, h, t);
             }
         }
         println!();
     }
 
-    engine.quit()
+    maia.quit()?;
+    sf.quit()
 }
