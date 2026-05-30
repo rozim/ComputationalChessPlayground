@@ -235,30 +235,27 @@ fn main() -> io::Result<()> {
             pos.play_unchecked(m);
         }
 
-        // Per-game accuracy summary, split by side.
+        // Per-game accuracy summary — White and Black side by side.
+        let cell = |t: usize, h: usize| -> String {
+            if t == 0 { "n/a".to_owned() }
+            else { format!("{:>5.1}% ({}/{})", 100.0 * h as f64 / t as f64, h, t) }
+        };
+
         println!();
-        for (side, side_name) in [(0usize, "White"), (1usize, "Black")] {
-            println!("  Accuracy ({side_name}):");
-            for (eidx, &elo) in ELOS.iter().enumerate() {
-                let t = elo_totals[side][eidx];
-                let h = elo_matches[side][eidx];
-                if t == 0 {
-                    println!("    Maia3 {:>4}     : n/a", elo);
-                } else {
-                    println!("    Maia3 {:>4}     : {:>5.1}% ({}/{})",
-                             elo, 100.0 * h as f64 / t as f64, h, t);
-                }
-            }
-            for (sidx, (name, _)) in STOCKFISH_RUNS.iter().enumerate() {
-                let t = sf_totals[side][sidx];
-                let h = sf_matches[side][sidx];
-                if t == 0 {
-                    println!("    Stockfish {:<4} : n/a", name);
-                } else {
-                    println!("    Stockfish {:<4} : {:>5.1}% ({}/{})",
-                             name, 100.0 * h as f64 / t as f64, h, t);
-                }
-            }
+        println!("    {:<16}  {:>16}  {:>16}", "Accuracy", "White", "Black");
+        for (eidx, &elo) in ELOS.iter().enumerate() {
+            let label = format!("Maia3 {elo}");
+            println!("    {:<16}  {:>16}  {:>16}",
+                     label,
+                     cell(elo_totals[0][eidx], elo_matches[0][eidx]),
+                     cell(elo_totals[1][eidx], elo_matches[1][eidx]));
+        }
+        for (sidx, (name, _)) in STOCKFISH_RUNS.iter().enumerate() {
+            let label = format!("Stockfish {name}");
+            println!("    {:<16}  {:>16}  {:>16}",
+                     label,
+                     cell(sf_totals[0][sidx], sf_matches[0][sidx]),
+                     cell(sf_totals[1][sidx], sf_matches[1][sidx]));
         }
         println!();
     }
