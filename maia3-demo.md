@@ -6,7 +6,7 @@ Create a Rust tool that runs the maia3 chess engine on a PGN file.
 
 search with UCI command "go nodes 1"
 
-ELO is from the list 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800
+ELO is from the list 1200, 1600, 1800, 2000, 2200, 2400, 2600, 2800
 
 To query the maia3 chess engine iwth a given ELO setting use the UCI option 'Elo'.
 

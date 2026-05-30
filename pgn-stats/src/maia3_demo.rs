@@ -18,7 +18,7 @@ use shakmaty::{
 
 const MAIA3_PATH: &str = "/Users/dave/venv-maia3/bin/maia3-23m";
 const NODES: u32 = 1;
-const ELOS: &[u32] = &[600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800];
+const ELOS: &[u32] = &[1200, 1600, 1800, 2000, 2200, 2400, 2600, 2800];
 
 const DEFAULT_MIN_PLY: usize = 10;
 
