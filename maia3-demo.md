@@ -51,11 +51,11 @@ for every PGN file
       }
       for every node setting from the number of nodes map (with name and nodes):
         invoke stockfish with the specified number of nodes
-	record if the move matches the played move
+	record if the move matches the played move, store by players color
     }
     at end of move emit move played and predictions for each ELO (maia3) and for each nodes value (stockfish)
    }
-   at end of game print accuracy for each ELO and nodes name/value
+   for each players color: at end of game print accuracy for each ELO and nodes name/value
 }
 
 

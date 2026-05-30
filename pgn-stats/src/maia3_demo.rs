@@ -158,11 +158,12 @@ fn main() -> io::Result<()> {
             Chess::default()
         };
 
-        // Per-engine-cell totals & matches for this game.
-        let mut elo_totals  = vec![0usize; ELOS.len()];
-        let mut elo_matches = vec![0usize; ELOS.len()];
-        let mut sf_totals   = vec![0usize; STOCKFISH_RUNS.len()];
-        let mut sf_matches  = vec![0usize; STOCKFISH_RUNS.len()];
+        // Per-engine-cell totals & matches for this game, split by side to
+        // move (White = 0, Black = 1).
+        let mut elo_totals:  [Vec<usize>; 2] = [vec![0; ELOS.len()], vec![0; ELOS.len()]];
+        let mut elo_matches: [Vec<usize>; 2] = [vec![0; ELOS.len()], vec![0; ELOS.len()]];
+        let mut sf_totals:   [Vec<usize>; 2] = [vec![0; STOCKFISH_RUNS.len()], vec![0; STOCKFISH_RUNS.len()]];
+        let mut sf_matches:  [Vec<usize>; 2] = [vec![0; STOCKFISH_RUNS.len()], vec![0; STOCKFISH_RUNS.len()]];
 
         // Header. Each engine-cell = 10 chars (2 leading + 7 SAN + 1 marker).
         print!("  {:>4}  {:<8}", "ply", "played");
@@ -178,6 +179,7 @@ fn main() -> io::Result<()> {
 
             if ply >= min_ply {
                 let fen = Fen::from_position(&pos, shakmaty::EnPassantMode::Legal).to_string();
+                let side = pos.turn() as usize; // White = 0, Black = 1
 
                 // ── maia3 sweep ────────────────────────────────────────────
                 maia.send(&format!("position fen {fen}"))?;
@@ -186,8 +188,8 @@ fn main() -> io::Result<()> {
                     maia.send(&format!("setoption name Elo value {elo}"))?;
                     maia.ensure_ready()?;
                     let (best_uci, best_san) = predict_san(&mut maia, &pos, MAIA3_NODES)?;
-                    if best_uci == actual_uci { elo_matches[eidx] += 1; }
-                    elo_totals[eidx] += 1;
+                    if best_uci == actual_uci { elo_matches[side][eidx] += 1; }
+                    elo_totals[side][eidx] += 1;
                     maia_preds.push(best_san);
                 }
 
@@ -196,8 +198,8 @@ fn main() -> io::Result<()> {
                 let mut sf_preds: Vec<String> = Vec::with_capacity(STOCKFISH_RUNS.len());
                 for (sidx, (_name, nodes)) in STOCKFISH_RUNS.iter().enumerate() {
                     let (best_uci, best_san) = predict_san(&mut sf, &pos, *nodes)?;
-                    if best_uci == actual_uci { sf_matches[sidx] += 1; }
-                    sf_totals[sidx] += 1;
+                    if best_uci == actual_uci { sf_matches[side][sidx] += 1; }
+                    sf_totals[side][sidx] += 1;
                     sf_preds.push(best_san);
                 }
 
@@ -233,27 +235,29 @@ fn main() -> io::Result<()> {
             pos.play_unchecked(m);
         }
 
-        // Per-game accuracy summary.
+        // Per-game accuracy summary, split by side.
         println!();
-        println!("  Accuracy:");
-        for (eidx, &elo) in ELOS.iter().enumerate() {
-            let t = elo_totals[eidx];
-            let h = elo_matches[eidx];
-            if t == 0 {
-                println!("    Maia3 {:>4}     : n/a", elo);
-            } else {
-                println!("    Maia3 {:>4}     : {:>5.1}% ({}/{})",
-                         elo, 100.0 * h as f64 / t as f64, h, t);
+        for (side, side_name) in [(0usize, "White"), (1usize, "Black")] {
+            println!("  Accuracy ({side_name}):");
+            for (eidx, &elo) in ELOS.iter().enumerate() {
+                let t = elo_totals[side][eidx];
+                let h = elo_matches[side][eidx];
+                if t == 0 {
+                    println!("    Maia3 {:>4}     : n/a", elo);
+                } else {
+                    println!("    Maia3 {:>4}     : {:>5.1}% ({}/{})",
+                             elo, 100.0 * h as f64 / t as f64, h, t);
+                }
             }
-        }
-        for (sidx, (name, _)) in STOCKFISH_RUNS.iter().enumerate() {
-            let t = sf_totals[sidx];
-            let h = sf_matches[sidx];
-            if t == 0 {
-                println!("    Stockfish {:<4} : n/a", name);
-            } else {
-                println!("    Stockfish {:<4} : {:>5.1}% ({}/{})",
-                         name, 100.0 * h as f64 / t as f64, h, t);
+            for (sidx, (name, _)) in STOCKFISH_RUNS.iter().enumerate() {
+                let t = sf_totals[side][sidx];
+                let h = sf_matches[side][sidx];
+                if t == 0 {
+                    println!("    Stockfish {:<4} : n/a", name);
+                } else {
+                    println!("    Stockfish {:<4} : {:>5.1}% ({}/{})",
+                             name, 100.0 * h as f64 / t as f64, h, t);
+                }
             }
         }
         println!();
